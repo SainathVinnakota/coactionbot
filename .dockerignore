@@ -1,0 +1,13 @@
+rag-pipeline/
+ui-dynamic/
+ui/
+.kiro/
+.vscode/
+tests/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.git/
+*.md
+pytest.ini
+supervisord.conf
