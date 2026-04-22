@@ -26,7 +26,7 @@ async def main():
     
     # agent.query() is now an async generator
     answer, sources, follow_ups = "", [], []
-    async for a, s, f in agent.query(session_id=session_id, query=query):
+    async for a, s, f in agent.query(session_id=session_id, query=query, role="underwriter"):
         answer, sources, follow_ups = a, s, f
     
     print("=" * 60)

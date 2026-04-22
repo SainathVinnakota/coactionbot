@@ -39,7 +39,9 @@ You must ask EXACTLY ONE clarifying question and STOP if any of the following am
 1. INSUFFICIENT DETAIL: The user query is too vague to search (e.g., searching for a "restaurant" without specific operation details or manual reference).
 2. AMBIGUOUS RETRIEVAL (MULTIPLE MATCHES):
    - SAME NAME, DIFFERENT CODES: If the retrieved chunks show multiple different class code numbers for the same or similar business names, list the specific class codes and ask the user which one they are interested in.
-   - MULTIPLE SECTIONS: If the query maps to different distinct sections in the manual for the same topic (e.g., "Special Projects" with conflicting requirements), ask the user for context.
+   - SELECTION REQUIRED: When presenting multiple class codes as options (e.g., more than 2-3), you MUST explicitly ask the user: "Which of these class codes would you like to explore in detail?"
+   - BRIEF DESCRIPTIONS ONLY: When listing multiple options, provide ONLY a brief (1-2 sentence) description for each. Do NOT provide full details (Submission requirements, prohibited ops, forms) until a unique selection is made.
+   - MULTIPLE SECTIONS: If the query maps to different distinct sections in the manual for the same topic, ask the user for context.
 3. CROSS-MANUAL CONFLICT: If retrieval returns relevant results from BOTH the Property Manual and the General Liability Manual for the same query, and the user hasn't specified which coverage they need, ask: "Are you inquiring about Property or General Liability coverage for this business?"
 
 CLARIFICATION RULES:
@@ -49,27 +51,36 @@ CLARIFICATION RULES:
 </clarification_protocol>
  
 <class_code_rule>
-- If the user provides a class code or business type:
-  - If unique, return full details (description, coverage options, property notes, requirements, prohibited operations, forms).
-  - If multiple similar codes exist, invoke the disambiguation protocol above to ask for the specific code.
+- If the user provides a unique class code or specific business type:
+  - Return full details (description, coverage options, property notes, requirements, prohibited operations, forms).
+- If the query is general (e.g., "Food products"):
+  - Invoke the disambiguation protocol to list matches and request selection.
 </class_code_rule>
  
 <answer_generation>
 - Generate response ONLY once you have non-ambiguous, specific context.
 - The response must be:
   - Direct and precise.
-  - Fully cited: For every fact or requirement provided, you MUST append the specific raw source URL (starting with http) found in the tool metadata. DO NOT convert these to [1] or [Source 1].
-  - Every answer must end with a "Sources:" section listing every unique URL and its corresponding heading used in the answer.
+  - NO INLINE LINKS: You are strictly forbidden from including URLs, hyperlinks, or "For more details, visit..." links within the main body of the answer.
+  - Every answer must end with a "Sources:" section listing every unique URL and its corresponding heading used in the answer. List the URLs here only.
 </answer_generation>
  
 <response_format>
 - Provide the answer first.
-- Then suggest exactly 3 relevant follow-up questions formatted as:
+- The order of your final output MUST be:
+  1. Main Answer text.
+  2. A "Sources:" section (listing unique URLs and headings).
+  3. A "**You might also want to ask:**" section (if applicable).
+
+- FOLLOW-UP QUESTIONS RULE:
+  - If you are answering a specific question or providing details about a class code (e.g., you are providing a description, requirements, coverage, etc.), you MUST suggest exactly 3 relevant follow-up questions at the very end of your response, formatted as:
 
 **You might also want to ask:**
 1. [question]
 2. [question]
 3. [question]
+
+  - ONLY skip these questions if you are asking a clarifying question (e.g., "Which code?") or presenting a list of codes for the user to choose from.
 </response_format>
  
 <fallback_protocol>
@@ -272,7 +283,13 @@ class BedrockKBAgent:
             # Save assistant response
             self.session_manager.add_message(session_id, "assistant", answer)
             
-            # 1. Extract Follow-up Questions
+            # 1. Extract Sources BEFORE clearing follow-up questions
+            # We search the full raw answer to ensure order-independence
+            found_urls = re.findall(r"(https?://[^\s\)\n<>]+)", answer)
+            seen = set()
+            sources = [x.strip(".,;:?!") for x in found_urls if not (x in seen or seen.add(x))]
+
+            # 2. Extract and Split Follow-up Questions
             follow_up_questions = []
             fu_marker = "**You might also want to ask:**"
             if fu_marker in answer:
@@ -282,12 +299,8 @@ class BedrockKBAgent:
                 matches = re.findall(r"\d+\.\s*(.+)", fu_text)
                 follow_up_questions = [m.strip() for m in matches if m.strip()][:3]
 
-            # 2. Extract Sources
-            found_urls = re.findall(r"(https?://[^\s\)\n<>]+)", answer)
-            seen = set()
-            sources = [x.strip(".,;:?!") for x in found_urls if not (x in seen or seen.add(x))]
-
             if role_key != "underwriter":
+                # Strip sources section and URLs for non-underwriters
                 answer = sanitize_non_underwriter_output(answer)
                 sources = []
 
