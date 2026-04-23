@@ -55,15 +55,23 @@ CLARIFICATION RULES:
   - Return full details (description, coverage options, property notes, requirements, prohibited operations, forms).
 - If the query is general (e.g., "Food products"):
   - Invoke the disambiguation protocol to list matches and request selection.
+- ELIGIBILITY UNCERTAINTY: If you cannot find an explicit "Eligible" or "Ineligible" status for a specific risk (e.g., "Condominium Associations"), you MUST NOT say "Yes we cover it." Instead, state that it is not explicitly listed in the binding authority manual and should be referred to an underwriter.
 </class_code_rule>
  
 <answer_generation>
 - Generate response ONLY once you have non-ambiguous, specific context.
 - The response must be:
   - Direct and precise.
+  - EXTREME GRANULARITY FOR FORMS: If the retrieved content contains specific Form Numbers (e.g., "CG 24 26") and Edition Dates (e.g., "0413"), you MUST include them exactly as written. NEVER summarize them into general terms (e.g., do not say "Additional Insured options" if the text says "CG2033").
+  - CONSERVATIVE & UNDERWRITER-FIRST: For any account that meets a referral threshold (e.g. >25% student housing, TIV limits, age limits), your answer MUST start by stating that the account requires a referral to a Coaction underwriter.
   - NO INLINE LINKS: You are strictly forbidden from including URLs, hyperlinks, or "For more details, visit..." links within the main body of the answer.
   - Every answer must end with a "Sources:" section listing every unique URL and its corresponding heading used in the answer. List the URLs here only.
 </answer_generation>
+
+<search_strategy>
+- SEARCH PERSISTENCE: If a user asks about "Limits," "TIV," "Max Value," "Age of building," or "Eligibility" and the retrieved class code content is blank, you MUST perform a broad search for "General Underwriting Guidelines" or "Property Eligibility Rules" to find universal limits.
+- BINDING AUTHORITY SCOPE: Assume all commercial insurance queries about business types (e.g., "Grocery Stores") are within scope if they are listed as class codes. Do not reject them as "out of scope" unless they are clearly unrelated to insurance.
+</search_strategy>
  
 <response_format>
 - Provide the answer first.
@@ -84,9 +92,10 @@ CLARIFICATION RULES:
 </response_format>
  
 <fallback_protocol>
-- OUT OF SCOPE: If the query is unrelated to underwriting, respond EXACTLY with: "I can only answer binding authority related questions."
-- MISSING DATA: If the query is within scope but no answer is found in the manuals, respond EXACTLY with: "Please contact a Coaction underwriter."
-</fallback_protocol>"""
+- OUT OF SCOPE: If the query is entirely unrelated to commercial insurance or underwriting (e.g., "what is the weather"), respond EXACTLY with: "I can only answer binding authority related questions."
+- MISSING DATA: If the query is within scope but no specific answer is found in the manuals after checking both class codes and general guidelines, respond EXACTLY with: "Please contact a Coaction underwriter."
+</fallback_protocol>
+"""
 
 NON_UNDERWRITER_POLICY = """
 <role_based_visibility_policy>
@@ -178,18 +187,44 @@ def search_manuals(query: str) -> str:
         if not results:
             return "No relevant information found in the manuals."
             
-        formatted_results = []
-        for r in results:
-            content = r.get('content', {}).get('text', '')
-            meta = r.get('metadata', {})
+        context_parts = []
+        source_urls = set()
+        
+        for res in results:
+            content = res.get('content', {}).get('text', '')
+            metadata = res.get('metadata', {})
             
-            # Extract metadata attributes we saved during S3 upload
-            source = meta.get('source_url', 'Unknown Source')
-            heading = meta.get('heading', 'General Info')
+            # --- Robust URL Extraction ---
+            # 1. Try to extract injected URL from the top of the content (most accurate)
+            injected_url_match = re.search(r'^SOURCE_URL:\s*(https?://\S+)', content, re.MULTILINE)
+            injected_code_match = re.search(r'^CLASS_CODE:\s*(\d+)', content, re.MULTILINE)
             
-            formatted_results.append(f"--- DOCUMENT ---\nHeading: {heading}\nSource: {source}\n\n{content}\n")
+            if injected_url_match:
+                url = injected_url_match.group(1).strip()
+            else:
+                # 2. Fallback to Bedrock metadata fields (often S3 links or missing)
+                url = metadata.get('sourceUrl') or metadata.get('source_url') or 'N/A'
             
-        return "\n\n".join(formatted_results)
+            # --- Robust Heading Extraction ---
+            if injected_code_match:
+                class_code = injected_code_match.group(1)
+                heading = f"Class Code {class_code}"
+            else:
+                # Extract the first ### or # header if present
+                header_match = re.search(r'^#+\s*(.+)', content, re.MULTILINE)
+                heading = metadata.get('heading') or (header_match.group(1) if header_match else "Manual Section")
+
+            source_urls.add(url)
+            
+            # Clean injected metadata lines from content before sending to LLM to save tokens
+            clean_content = re.sub(r'^(SOURCE_URL|CLASS_CODE):.*\n?', '', content, flags=re.MULTILINE).strip()
+            # Remove the horizontal separator if present
+            clean_content = re.sub(r'^---\s*\n', '', clean_content).strip()
+
+            part = f"Source: {url}\nHeading: {heading}\nContent:\n{clean_content}"
+            context_parts.append(part)
+            
+        return "\n\n".join(context_parts)
         
     except Exception as e:
         logger.error("bedrock_retrieval_failed", error=str(e))
