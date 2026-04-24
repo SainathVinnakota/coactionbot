@@ -86,3 +86,28 @@ class FullPageCrawler:
         async with AsyncWebCrawler() as crawler:
             await self._crawl_recursive(self.start_url, crawler)
         return self.page_contents
+
+if __name__ == "__main__":
+    async def fast_run():
+        start_url = "https://bindingauthority.coactionspecialty.com/manuals/guide.html"
+        output_dir = "data/bedrock_ingest/full_manuals"
+        
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir, exist_ok=True)
+            
+        print(f"--- Starting recovery crawl from {start_url} ---")
+        crawler = FullPageCrawler(start_url)
+        pages = await crawler.run()
+        
+        print(f"Crawled {len(pages)} pages. Saving to {output_dir}...")
+        for url, content in pages.items():
+            # Get the page name (e.g., 44280.html -> 44280.md)
+            name = url.split('/')[-1].replace('.html', '.md')
+            if not name: name = "index.md"
+            
+            with open(os.path.join(output_dir, name), 'w', encoding='utf-8') as f:
+                f.write(content)
+        
+        print(f"SUCCESS: {len(pages)} class code files recovered!")
+
+    asyncio.run(fast_run())

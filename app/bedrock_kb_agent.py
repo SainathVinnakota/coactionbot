@@ -51,10 +51,19 @@ CLARIFICATION RULES:
 - Ask exactly ONE question and stop. NEVER proceed to answer until the ambiguity is resolved.
 </clarification_protocol>
  
+<underwriting_reasoning_protocol>
+- Before answering a business eligibility question (e.g., "Is this risk acceptable?"), you MUST mentally follow this sequence:
+  1. IDENTIFY INTENT: Is this asking about Property (Buildings/Limits) or Casualty/GL (Operations/Classes)?
+  2. IDENTIFY BUSINESS: What is the specific business type (e.g., "Restaurant," "Grocery Store")?
+  3. LOOKUP RULES: Retrieve the "Prohibited," "Submit," or "Acceptable" sections specifically for that business.
+  4. VERIFY RESTRICTIONS: Check for specific "Killer" exclusions (e.g., cooking with grease, age of roof, loss history).
+</underwriting_reasoning_protocol>
+
 <class_code_rule>
 - If the user provides a unique class code or specific business type:
   - Return full details (description, coverage options, property notes, requirements, prohibited operations, forms).
-- STRICT KEY VERIFICATION: If the user's query mentions a specific Form Number, Class Code, or ID (e.g., "CG 22 64"), you MUST locate that specific number or its variant (e.g., "CG2264") in the retrieved text.
+- ELIGIBILITY MAP: If a business is "Acceptable" but has "Submit" requirements (e.g., "Requires an inspection"), you MUST lead with the requirement.
+- STRICT KEY VERIFICATION: If the user's query mentions a specific Form Number, Class Code, or ID (e.g., "CG 22 64"), you MUST locate that specific number or its variant (e.g., "CG2264") in the retrieved text. 
   - If you locate the number in a list or table with a description, that is your primary source.
   - If the specific number or code is NOT present in any variation in the retrieved text, state that you cannot find information for that specific code.
 - If the query is general (e.g., "Food products"):
@@ -66,7 +75,7 @@ CLARIFICATION RULES:
 - Generate response ONLY once you have non-ambiguous, specific context. If retrieval returns multiple class codes or sections for the same query, this is NOT non-ambiguous — invoke the disambiguation protocol first, even if full details are available for all matches.
 - The response must be:
   - Direct and precise.
-  - IRON-CLAD CITATIONS: You are strictly prohibited from 'guessing' or 'spamming' citations. You MUST ONLY list a URL in the "Sources:" section if that specific document (referenced by the correct URL) contains the exact information you are stating. If you use information from Document A, you must cite URL A. If you state a fact about a Form Number, you MUST verify that the form number appears in the cited document.
+  - IRON-CLAD CITATIONS: You are strictly prohibited from 'guessing' or 'spamming' citations. You MUST ONLY list a URL in the "Sources:" section if that specific document (referenced by the correct URL) contains the exact information you are stating. If you use information from Document A, you must cite URL A. If you state a fact about a Form Number, you MUST verify that the form number appears in the cited document. 
   - FAKE CITATION PENALTY: Including a URL in the sources that does not contain the information is a critical failure.
   - EXTREME GRANULARITY FOR FORMS: If the retrieved content contains specific Form Numbers (e.g., "CG 24 26") and Edition Dates (e.g., "0413"), you MUST include them exactly as written.
   - CONSERVATIVE & UNDERWRITER-FIRST: For any account that meets a referral threshold, your answer MUST start by stating that the account requires a referral to a Coaction underwriter.
@@ -194,14 +203,21 @@ def search_manuals(query: str) -> str:
             aws_secret_access_key=settings.aws_secret_access_key
         )
         
-        logger.info("searching_bedrock_kb", query=query, kb_id=settings.bedrock_kb_id)
-        
+        # --- QUERY EXPANSION: Broaden search for eligibility requests ---
+        search_query = query
+        eligibility_keywords = ["acceptable", "eligible", "appetite", "suitability", "cover", "prohibited"]
+        if any(k in query.lower() for k in eligibility_keywords):
+            # Expand the search to pull in rules like Prohibited/Submit
+            search_query = f"{query} class code prohibited submit requirements eligibility"
+            logger.info("query_expanded", original=query, expanded=search_query)
+
         response = client.retrieve(
             knowledgeBaseId=settings.bedrock_kb_id,
-            retrievalQuery={'text': query},
+            retrievalQuery={'text': search_query},
             retrievalConfiguration={
                 'vectorSearchConfiguration': {
-                    'numberOfResults': 5
+                    'numberOfResults': 15,
+                    'overrideSearchType': 'HYBRID'
                 }
             }
         )
@@ -209,26 +225,42 @@ def search_manuals(query: str) -> str:
         results = response.get('retrievalResults', [])
         logger.info("retrieval_complete", result_count=len(results))
         
-        if not results:
-            return "No relevant information found in the manuals."
-            
+        # --- CODE-LEVEL FILTER: Ensure specific codes exist in the context ---
+        # Extract numeric portions (4+ digits) from codes like CG2264, GL0592, class code 92478
+        specific_codes = re.findall(r'(\d{4,})', query)
+        
+        # --- DEBUG LOGGING ---
+        print(f"\n[DEBUG] RETRIEVED {len(results)} RESULTS FOR QUERY: '{query}'")
+        if specific_codes:
+            print(f"[DEBUG] DETECTED SPECIFIC CODES: {specific_codes}")
+        
         context_parts = []
         source_urls = set()
         
-        for res in results:
+        for i, res in enumerate(results):
             content = res.get('content', {}).get('text', '')
             metadata = res.get('metadata', {})
             
+            # If a specific code was requested, verify it exists in THIS chunk
+            if specific_codes:
+                found_code = any(code in content.replace(" ", "") for code in specific_codes)
+                if not found_code:
+                    print(f"  {i+1}. FILTERED OUT: {res.get('metadata', {}).get('sourceUrl')} (Code mismatch)")
+                    continue
+
             # --- Robust URL Extraction ---
-            # 1. Try to extract injected URL from the top of the content (most accurate)
+            s3_uri = metadata.get('source_url') or metadata.get('sourceUrl') or ''
             injected_url_match = re.search(r'^SOURCE_URL:\s*(https?://\S+)', content, re.MULTILINE)
             injected_code_match = re.search(r'^CLASS_CODE:\s*(\d+)', content, re.MULTILINE)
             
             if injected_url_match:
                 url = injected_url_match.group(1).strip()
+            elif 'full-page-crawl/' in s3_uri:
+                # URL RECOVERY: Map S3 filename back to website URL
+                filename = s3_uri.split('/')[-1].replace('.md', '.html')
+                url = f"https://bindingauthority.coactionspecialty.com/manuals/{filename}"
             else:
-                # 2. Fallback to Bedrock metadata fields (often S3 links or missing)
-                url = metadata.get('sourceUrl') or metadata.get('source_url') or 'N/A'
+                url = s3_uri or 'N/A'
             
             # --- Robust Heading Extraction ---
             if injected_code_match:
@@ -248,6 +280,9 @@ def search_manuals(query: str) -> str:
 
             part = f"Source: {url}\nHeading: {heading}\nContent:\n{clean_content}"
             context_parts.append(part)
+        
+        if not context_parts:
+            return "No relevant information found in the manuals."
             
         return "\n\n".join(context_parts)
         
