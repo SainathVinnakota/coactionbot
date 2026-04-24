@@ -72,6 +72,11 @@ CLARIFICATION RULES:
   - CONSERVATIVE & UNDERWRITER-FIRST: For any account that meets a referral threshold, your answer MUST start by stating that the account requires a referral to a Coaction underwriter.
   - Every answer must end with a "Sources:" section listing unique URLs.
 </answer_generation>
+
+<search_strategy>
+- SEARCH PERSISTENCE: If a user asks about "Limits," "TIV," "Max Value," "Age of building," or "Eligibility" and the retrieved class code content is blank, you MUST perform a broad search for "General Underwriting Guidelines" or "Property Eligibility Rules" to find universal limits.
+- BINDING AUTHORITY SCOPE: Assume all commercial insurance queries about business types (e.g., "Grocery Stores") are within scope if they are listed as class codes. Do not reject them as "out of scope" unless they are clearly unrelated to insurance.
+</search_strategy>
  
 <search_strategy>
 - SEARCH PERSISTENCE: If a user asks about "Limits," "TIV," "Max Value," "Age of building," or "Eligibility" and the retrieved class code content is blank, you MUST perform a broad search for "General Underwriting Guidelines" or "Property Eligibility Rules" to find universal limits.
@@ -207,18 +212,44 @@ def search_manuals(query: str) -> str:
         if not results:
             return "No relevant information found in the manuals."
             
-        formatted_results = []
-        for r in results:
-            content = r.get('content', {}).get('text', '')
-            meta = r.get('metadata', {})
+        context_parts = []
+        source_urls = set()
+        
+        for res in results:
+            content = res.get('content', {}).get('text', '')
+            metadata = res.get('metadata', {})
             
-            # Extract metadata attributes we saved during S3 upload
-            source = meta.get('source_url', 'Unknown Source')
-            heading = meta.get('heading', 'General Info')
+            # --- Robust URL Extraction ---
+            # 1. Try to extract injected URL from the top of the content (most accurate)
+            injected_url_match = re.search(r'^SOURCE_URL:\s*(https?://\S+)', content, re.MULTILINE)
+            injected_code_match = re.search(r'^CLASS_CODE:\s*(\d+)', content, re.MULTILINE)
             
-            formatted_results.append(f"--- DOCUMENT ---\nHeading: {heading}\nSource: {source}\n\n{content}\n")
+            if injected_url_match:
+                url = injected_url_match.group(1).strip()
+            else:
+                # 2. Fallback to Bedrock metadata fields (often S3 links or missing)
+                url = metadata.get('sourceUrl') or metadata.get('source_url') or 'N/A'
             
-        return "\n\n".join(formatted_results)
+            # --- Robust Heading Extraction ---
+            if injected_code_match:
+                class_code = injected_code_match.group(1)
+                heading = f"Class Code {class_code}"
+            else:
+                # Extract the first ### or # header if present
+                header_match = re.search(r'^#+\s*(.+)', content, re.MULTILINE)
+                heading = metadata.get('heading') or (header_match.group(1) if header_match else "Manual Section")
+
+            source_urls.add(url)
+            
+            # Clean injected metadata lines from content before sending to LLM to save tokens
+            clean_content = re.sub(r'^(SOURCE_URL|CLASS_CODE):.*\n?', '', content, flags=re.MULTILINE).strip()
+            # Remove the horizontal separator if present
+            clean_content = re.sub(r'^---\s*\n', '', clean_content).strip()
+
+            part = f"Source: {url}\nHeading: {heading}\nContent:\n{clean_content}"
+            context_parts.append(part)
+            
+        return "\n\n".join(context_parts)
         
     except Exception as e:
         logger.error("bedrock_retrieval_failed", error=str(e))
@@ -314,7 +345,13 @@ class BedrockKBAgent:
             # Save assistant response
             self.session_manager.add_message(session_id, "assistant", answer)
             
-            # 1. Extract Follow-up Questions
+            # 1. Extract Sources BEFORE clearing follow-up questions
+            # We search the full raw answer to ensure order-independence
+            found_urls = re.findall(r"(https?://[^\s\)\n<>]+)", answer)
+            seen = set()
+            sources = [x.strip(".,;:?!") for x in found_urls if not (x in seen or seen.add(x))]
+
+            # 2. Extract and Split Follow-up Questions
             follow_up_questions = []
             fu_marker = "**You might also want to ask:**"
             if fu_marker in answer:
