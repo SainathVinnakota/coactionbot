@@ -246,6 +246,7 @@ def on_clear():
         gr.update(visible=False),    # fu2
         gr.update(visible=False),    # fu3
         gr.update(visible=True),     # suggestions
+        "",                          # msg
     )
 
 # ─── Build App ───────────────────────────────────────────────────────────────
