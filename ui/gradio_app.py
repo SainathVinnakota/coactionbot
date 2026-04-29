@@ -1,5 +1,5 @@
 """
-Coaction Underwriting Assistant — Gradio 6.5 UI
+Coaction Binding Authority Assistant — Gradio 6.5 UI
 Minimalist monochrome design with real-time streaming.
 """
 import gradio as gr
@@ -39,6 +39,14 @@ def signup_user(name: str, email: str, password: str, role: str):
 
 
 def login_user(email: str, password: str):
+    if not email or not password:
+        return (
+            {"authenticated": False, "name": "", "email": "", "role": "", "token": ""},
+            "Please enter both email and password.",
+            gr.update(visible=False),
+            gr.update(visible=True),
+            ""
+        )
     try:
         r = requests.post(
             f"{API_BASE}/auth/login",
@@ -64,8 +72,14 @@ def login_user(email: str, password: str):
             "role": user.get("role", ""),
             "token": token,
         }
-        role_title = str(session_user.get('role', '')).title()
-        welcome = f"Welcome to the {role_title} Portal, {session_user['name']}."
+        role_key = str(session_user.get('role', '')).strip().lower()
+        user_name = session_user['name']
+        if role_key == 'underwriter':
+            welcome = f"Welcome to the Underwriter Portal, {user_name}."
+        elif role_key == 'agent':
+            welcome = f"Welcome to the Agent Portal, {user_name}."
+        else:
+            welcome = f"Welcome, {user_name}."
         return (
             session_user, 
             welcome, 
@@ -206,20 +220,6 @@ def respond(message, history, session_id, top_k, user_state):
                         session_id = data["session_id"]
                         
                     answer = data.get("answer", "")
-                    sources = data.get("sources", [])
-                    if sources:
-                        unique_sources = []
-                        seen = set()
-                        for src in sources:
-                            if src and src not in seen:
-                                seen.add(src)
-                                unique_sources.append(src)
-
-                        has_sources_section = ("**Sources**" in answer) or ("Sources:" in answer)
-                        if not has_sources_section:
-                            missing_sources = [src for src in unique_sources if src not in answer]
-                            if missing_sources:
-                                answer = f"{answer}\n\n**Sources**\n" + "\n".join(f"- {src}" for src in missing_sources)
                     history[-1]["content"] = answer
                     fups = data.get("follow_up_questions", [])
                     fu_updates = []
@@ -263,7 +263,7 @@ def on_clear():
 # ─── Build App ───────────────────────────────────────────────────────────────
 
 def build():
-    with gr.Blocks(title="Coaction Underwriting Assistant") as app:
+    with gr.Blocks(title="Coaction Binding Authority Assistant") as app:
 
         session_state = gr.State("")
         user_state = gr.State({"authenticated": False, "name": "", "email": "", "role": "", "token": ""})
@@ -305,7 +305,7 @@ def build():
                 placeholder=(
                     '<div style="text-align:center;padding:12rem 1rem;color:#94a3b8;">'
                     '<p style="font-size:1.1rem;font-weight:600;color:#1e293b;">'
-                    'Coaction Underwriting Assistant</p>'
+                    'Coaction Binding Authority Assistant</p>'
                     '<p style="font-size:0.82rem;">Ask about class codes, '
                     'coverage options, or manual guidelines.</p></div>'
                 ),
@@ -334,6 +334,7 @@ def build():
                     max_lines=3,
                 )
                 send = gr.Button("Send", variant="primary", scale=1, min_width=80)
+                clear = gr.Button("Clear", scale=1, min_width=70)
                 logout = gr.Button("Logout", scale=1, min_width=70)
 
         # ── Wiring ──
@@ -367,6 +368,15 @@ def build():
             logout_user,
             None,
             [user_state, li_status, chat_col, auth_col, user_badge, chatbot, session_state, fu1, fu2, fu3, sug_row, msg],
+        )
+
+        def clear_chat():
+            return [], "", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), ""
+            
+        clear.click(
+            clear_chat,
+            None,
+            [chatbot, session_state, fu1, fu2, fu3, sug_row, msg]
         )
 
     return app

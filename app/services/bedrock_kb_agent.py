@@ -13,7 +13,7 @@ from app.core.logger import get_logger
 
 # Import refactored logic
 from app.core.prompts import SYSTEM_PROMPT, NON_UNDERWRITER_POLICY
-from app.services.bedrock_retriever import search_manuals
+from app.services.bedrock_retriever import search_manuals, get_last_retrieval_sources
 from app.utils.hooks import RoleBasedOutputHook
 
 logger = get_logger(__name__)
@@ -117,10 +117,15 @@ class BedrockKBAgent:
                 matches = re.findall(r"\d+\.\s*(.+)", fu_text)
                 follow_up_questions = [m.strip() for m in matches if m.strip()][:3]
 
-            # Extract Sources
-            found_urls = re.findall(r"(https?://[^\s\)\n<>]+)", answer)
-            seen = set()
-            sources = [x.strip(".,;:?!") for x in found_urls if not (x in seen or seen.add(x))]
+            # Get source URLs — only include ones the LLM actually cited in the answer
+            retrieval_sources = get_last_retrieval_sources()
+            all_urls = [s["url"] for s in retrieval_sources if s.get("url") and s["url"] != "N/A"]
+            
+            # Filter to only URLs that appear in the LLM's answer text
+            cited_urls = [url for url in all_urls if url in answer]
+            
+            # If LLM didn't include any URLs, fall back to the top 3 retrieval sources
+            sources = cited_urls if cited_urls else all_urls[:3]
 
             # Final yield
             yield answer, sources, follow_up_questions
