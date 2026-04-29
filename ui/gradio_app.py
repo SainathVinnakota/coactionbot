@@ -1,5 +1,5 @@
 """
-Coaction Underwriting Assistant — Gradio 6.5 UI
+Coaction Binding Authority Assistant — Gradio 6.5 UI
 Minimalist monochrome design with real-time streaming.
 """
 import gradio as gr
@@ -37,7 +37,16 @@ def signup_user(name: str, email: str, password: str, role: str):
         return f"Signup failed: {exc}"
 
 
+
 def login_user(email: str, password: str):
+    if not email or not password:
+        return (
+            {"authenticated": False, "name": "", "email": "", "role": "", "token": ""},
+            "Please enter both email and password.",
+            gr.update(visible=False),
+            gr.update(visible=True),
+            ""
+        )
     try:
         r = requests.post(
             f"{API_BASE}/auth/login",
@@ -51,7 +60,7 @@ def login_user(email: str, password: str):
                 f"Login failed: {detail}",
                 gr.update(visible=False),
                 gr.update(visible=True),
-                "",
+                ""
             )
         payload = r.json()
         user = payload.get("user", {})
@@ -63,15 +72,28 @@ def login_user(email: str, password: str):
             "role": user.get("role", ""),
             "token": token,
         }
-        welcome = f"Logged in as {session_user['name']} ({session_user['role']})."
-        return session_user, welcome, gr.update(visible=True), gr.update(visible=False), welcome
+        role_key = str(session_user.get('role', '')).strip().lower()
+        user_name = session_user['name']
+        if role_key == 'underwriter':
+            welcome = f"Welcome to the Underwriter Portal, {user_name}."
+        elif role_key == 'agent':
+            welcome = f"Welcome to the Agent Portal, {user_name}."
+        else:
+            welcome = f"Welcome, {user_name}."
+        return (
+            session_user, 
+            welcome, 
+            gr.update(visible=True), 
+            gr.update(visible=False), 
+            welcome
+        )
     except Exception as exc:
         return (
             {"authenticated": False, "name": "", "email": "", "role": "", "token": ""},
             f"Login failed: {exc}",
             gr.update(visible=False),
             gr.update(visible=True),
-            "",
+            ""
         )
 
 
@@ -88,8 +110,10 @@ def logout_user():
         gr.update(visible=False),    # fu2
         gr.update(visible=False),    # fu3
         gr.update(visible=True),     # suggestions
-        "",                          # msg
+        ""                           # msg
     )
+
+
 
 def api_health() -> str:
     try:
@@ -147,7 +171,6 @@ SUGGESTIONS = [
 def respond(message, history, session_id, top_k, user_state):
     """
     Generator that yields (history, session_id, fu1, fu2, fu3, sug_visible, msg)
-    on every state change so the UI stays responsive.
     """
     if not user_state or not user_state.get("authenticated"):
         history = list(history or [])
@@ -164,18 +187,16 @@ def respond(message, history, session_id, top_k, user_state):
 
     history = list(history or [])
 
-    # 1. Show user bubble immediately
     history.append({"role": "user", "content": message})
     history.append({"role": "assistant", "content": "⏳ Thinking…"})
     yield (history, session_id,
            gr.update(visible=False), gr.update(visible=False), gr.update(visible=False),
            gr.update(visible=False), "")
 
-    # 2. Stream from backend
     try:
         with requests.post(
             f"{API_BASE}/query",
-            json={"query": message, "session_id": session_id, "top_k": top_k},
+            json={"query": message, "session_id": session_id or "", "top_k": top_k},
             headers={"Authorization": f"Bearer {user_state.get('token', '')}"},
             stream=True, timeout=120,
         ) as resp:
@@ -195,21 +216,10 @@ def respond(message, history, session_id, top_k, user_state):
                            gr.update(visible=False), gr.update(visible=False), "")
 
                 elif data.get("type") == "final":
+                    if "session_id" in data and not session_id:
+                        session_id = data["session_id"]
+                        
                     answer = data.get("answer", "")
-                    sources = data.get("sources", [])
-                    if sources:
-                        unique_sources = []
-                        seen = set()
-                        for src in sources:
-                            if src and src not in seen:
-                                seen.add(src)
-                                unique_sources.append(src)
-
-                        has_sources_section = ("**Sources**" in answer) or ("Sources:" in answer)
-                        if not has_sources_section:
-                            missing_sources = [src for src in unique_sources if src not in answer]
-                            if missing_sources:
-                                answer = f"{answer}\n\n**Sources**\n" + "\n".join(f"- {src}" for src in missing_sources)
                     history[-1]["content"] = answer
                     fups = data.get("follow_up_questions", [])
                     fu_updates = []
@@ -218,6 +228,7 @@ def respond(message, history, session_id, top_k, user_state):
                             fu_updates.append(gr.update(value=fups[i], visible=True))
                         else:
                             fu_updates.append(gr.update(visible=False))
+                    
                     yield (history, session_id, *fu_updates,
                            gr.update(visible=False), "")
 
@@ -246,13 +257,13 @@ def on_clear():
         gr.update(visible=False),    # fu2
         gr.update(visible=False),    # fu3
         gr.update(visible=True),     # suggestions
-        "",                          # msg
+        ""                           # msg
     )
 
 # ─── Build App ───────────────────────────────────────────────────────────────
 
 def build():
-    with gr.Blocks(title="Coaction Underwriting Assistant") as app:
+    with gr.Blocks(title="Coaction Binding Authority Assistant") as app:
 
         session_state = gr.State("")
         user_state = gr.State({"authenticated": False, "name": "", "email": "", "role": "", "token": ""})
@@ -294,7 +305,7 @@ def build():
                 placeholder=(
                     '<div style="text-align:center;padding:12rem 1rem;color:#94a3b8;">'
                     '<p style="font-size:1.1rem;font-weight:600;color:#1e293b;">'
-                    'Coaction Underwriting Assistant</p>'
+                    'Coaction Binding Authority Assistant</p>'
                     '<p style="font-size:0.82rem;">Ask about class codes, '
                     'coverage options, or manual guidelines.</p></div>'
                 ),
@@ -323,7 +334,7 @@ def build():
                     max_lines=3,
                 )
                 send = gr.Button("Send", variant="primary", scale=1, min_width=80)
-                clear = gr.Button("Clear", scale=1, min_width=60)
+                clear = gr.Button("Clear", scale=1, min_width=70)
                 logout = gr.Button("Logout", scale=1, min_width=70)
 
         # ── Wiring ──
@@ -346,10 +357,8 @@ def build():
                 respond, ins, outs
             )
 
-        # Clear
-        clear.click(on_clear, None, outs)
-
         su_btn.click(signup_user, [su_name, su_email, su_password, su_role], [su_status])
+        
         li_btn.click(
             login_user,
             [li_email, li_password],
@@ -359,6 +368,15 @@ def build():
             logout_user,
             None,
             [user_state, li_status, chat_col, auth_col, user_badge, chatbot, session_state, fu1, fu2, fu3, sug_row, msg],
+        )
+
+        def clear_chat():
+            return [], "", gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), ""
+            
+        clear.click(
+            clear_chat,
+            None,
+            [chatbot, session_state, fu1, fu2, fu3, sug_row, msg]
         )
 
     return app
