@@ -19,6 +19,27 @@ from app.utils.hooks import RoleBasedOutputHook
 logger = get_logger(__name__)
 
 
+def _normalize_question(text: str) -> str:
+    """Normalize question text for stable dedup checks."""
+    if not text:
+        return ""
+    normalized = text.strip().lower()
+    normalized = re.sub(r"^\d+\.\s*", "", normalized)
+    normalized = re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"[^\w\s]", "", normalized)
+    return normalized
+
+
+def _extract_followups_from_assistant_message(content: str) -> list[str]:
+    """Extract historical follow-up questions from assistant responses."""
+    if not content or "**You might also want to ask:**" not in content:
+        return []
+    marker = "**You might also want to ask:**"
+    section = content.split(marker, 1)[1]
+    matches = re.findall(r"\d+\.\s*(.+)", section)
+    return [m.strip() for m in matches if m.strip()]
+
+
 class BedrockKBAgent:
     """Strands Agent with OpenAI LLM and Managed AWS Bedrock Knowledge Base (Aurora)."""
 
@@ -115,7 +136,40 @@ class BedrockKBAgent:
                 answer = parts[0].strip()
                 fu_text = parts[1]
                 matches = re.findall(r"\d+\.\s*(.+)", fu_text)
-                follow_up_questions = [m.strip() for m in matches if m.strip()][:3]
+                raw_followups = [m.strip() for m in matches if m.strip()]
+
+                # Prevent repeated follow-ups by filtering against user asks
+                # and previously suggested follow-up questions in this session.
+                history = self.session_manager.get_messages(session_id)
+                historical_questions = set()
+
+                for msg in history:
+                    role = (msg.get("role") or "").strip().lower()
+                    content = msg.get("content") or ""
+                    if role == "user":
+                        normalized_user_q = _normalize_question(content)
+                        if normalized_user_q:
+                            historical_questions.add(normalized_user_q)
+                    elif role == "assistant":
+                        for prev_fu in _extract_followups_from_assistant_message(content):
+                            normalized_fu = _normalize_question(prev_fu)
+                            if normalized_fu:
+                                historical_questions.add(normalized_fu)
+
+                seen_in_this_response = set()
+                deduped_followups: list[str] = []
+                for question in raw_followups:
+                    normalized = _normalize_question(question)
+                    if not normalized:
+                        continue
+                    if normalized in historical_questions or normalized in seen_in_this_response:
+                        continue
+                    seen_in_this_response.add(normalized)
+                    deduped_followups.append(question)
+                    if len(deduped_followups) == 3:
+                        break
+
+                follow_up_questions = deduped_followups
 
             # Get source URLs — only include ones the LLM actually cited in the answer
             retrieval_sources = get_last_retrieval_sources()
