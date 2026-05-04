@@ -136,6 +136,8 @@ CLARIFICATION RULES:
 3. [question]
  
   - UNIQUE REQUIREMENT: You MUST review the conversation history and ensure that none of the follow-up questions you suggest have already been asked by the user, OR previously suggested by you. Your suggestions must be strictly novel.
+  - ANTI-REPETITION GUARDRAIL: Do NOT ask paraphrases of recently asked/suggested follow-ups. If a similar follow-up was just asked, suggest a different angle (e.g., forms, exclusions, limits, state eligibility, referral thresholds, documentation requirements).
+  - IMMEDIATE TURN RULE: The current user question can NEVER be repeated as a follow-up question in the same response.
   - ONLY skip these questions if you are asking a clarifying question (e.g., "Which code?") or presenting a list of codes for the user to choose from.
 </response_format>
  
